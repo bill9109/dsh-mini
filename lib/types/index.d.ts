@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
+import { PageBroker } from './page-broker.ts';
 /**
  * Loopback Host plugin behind the browser extension and the desktop
  * capsule. It owns one authenticated HTTP endpoint on 127.0.0.1 and turns a
@@ -25,4 +26,28 @@ export interface Config {
     /** Loopback port of the side-panel carrier (the real DSH client, proxied); defaults to 18766. */
     readonly panelPort?: number;
 }
+/** The slice of `ctx.systemPrompt` the page policy needs. */
+interface SystemPromptService {
+    section(section: {
+        name: string;
+        order: number;
+        text: (context: {
+            agent?: {
+                id?: unknown;
+                session?: {
+                    id?: unknown;
+                };
+            };
+        }) => string;
+    }): () => void;
+}
+/**
+ * The same policy for every other turn on a session the page is attached to - in practice the turns
+ * the side panel starts, which DSH's own client creates without {@link setupRewrite}. Global but
+ * conditional, like plan mode's policy: the text is resolved at each assembly and is empty (so the
+ * section disappears) unless the asking agent's session currently has an active page task. A
+ * capsule run registers the same name in its agent scope, which shadows this one with equal text.
+ */
+export declare function registerPagePolicy(systemPrompt: SystemPromptService, broker: PageBroker): () => void;
 export declare function apply(rawContext: Context, config?: Config): Promise<void>;
+export {};

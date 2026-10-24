@@ -11,6 +11,7 @@ All notable user-facing changes to dsh-mini are documented in this file. The pro
 
 ### Changed
 
+- The page-edit policy ("edit the page only with page_read / page_edit / page_operation_status") is now a conditional global system-prompt section, like plan mode's policy. It renders for every turn whose session has a page attached, including turns started in the side panel, and is empty otherwise. Host build tag `sp5`.
 - `NO_ACTIVE_PAGE_TASK` now tells the model that no page is attached and how the user can attach one.
 - Host build tag `sp4`; new routes `POST /v1/panel/lease`, `POST /v1/panel/lease/release`, `POST /v2/page/surface` and socket frame `surface`. A task the Host ended closes its socket with `bye TASK_ENDED` / 4410.
 
