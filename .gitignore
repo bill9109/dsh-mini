@@ -1,0 +1,10 @@
+# Build-only symlink into the dsh checkout (scripts/build.mjs and scripts/test.mjs create and drop it)
+node_modules/
+
+# tsc incremental state
+*.tsbuildinfo
+
+# Screenshots written by the extension's browser tests
+chrome-extension/artifacts/
+
+.DS_Store

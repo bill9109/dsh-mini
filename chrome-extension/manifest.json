@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "DSH Mini Panel",
+  "version": "0.3.0",
+  "description": "Rewrite selected page text through a local DSH bridge.",
+  "icons": {
+    "16": "src/icons/icon-16.png",
+    "32": "src/icons/icon-32.png",
+    "48": "src/icons/icon-48.png",
+    "128": "src/icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "DSH Mini Panel · 连接设置",
+    "default_icon": {
+      "16": "src/icons/icon-16.png",
+      "32": "src/icons/icon-32.png",
+      "48": "src/icons/icon-48.png",
+      "128": "src/icons/icon-128.png"
+    }
+  },
+  "permissions": [
+    "storage",
+    "scripting",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:18765/*",
+    "http://localhost:18765/*",
+    "http://127.0.0.1:18766/*",
+    "http://localhost:18766/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "options_page": "src/options.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/edit-protocol.js",
+        "src/target-registry.js",
+        "src/adapters/input.js",
+        "src/adapters/richtext.js",
+        "src/adapters/feishu.js",
+        "src/edit-core.js",
+        "src/page-channel.js",
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "src/sidepanel.html"
+  },
+  "minimum_chrome_version": "116"
+}

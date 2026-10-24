@@ -1,0 +1,18 @@
+# dsh-mini bundle patch: mount the DSH Mini Host plugin.
+#
+# Applied when this bundle appears in a profile's dsh.profile.bundles list.
+# The Host half (package root) serves the loopback endpoint the Chrome extension
+# talks to; the browser half (dsh.client) adds the pairing card under
+# Settings -> Plugins and is discovered through the package's dsh.client
+# declaration + exports["./client"].
+#
+# Every config key is optional. Uncomment to override.
+
+- insert:
+    - id: dsh-mini
+      name: 'dsh-mini'
+      # config:
+      #   port: 18765                 # loopback API port used by the Chrome extension
+      #   panelPort: 18766            # side-panel proxy port
+      #   workspace: /path/to/dir     # working directory of rewrite sessions (default: process cwd)
+      #   timeoutMs: 600000           # per-request deadline

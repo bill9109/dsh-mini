@@ -1,0 +1,397 @@
+/* DSH design tokens, copied from ui-theme/styles/design-platform.css and
+   base.css for this standalone extension page, which cannot import the app
+   stylesheet. Light values first, then the dark overrides. Every colour below
+   resolves through a token so the two themes stay in step. */
+:root {
+  color-scheme: light;
+  --ds-bg-layer-1: #fff;
+  --ds-bg-module: rgb(245, 246, 247);
+  --ds-border-l1: rgba(0, 0, 0, 0.04);
+  --ds-border-l2: rgba(0, 0, 0, 0.1);
+  --ds-border-l3: rgba(0, 0, 0, 0.12);
+  --ds-border-l4: rgba(0, 0, 0, 0.16);
+  --ds-label-primary: rgb(15, 17, 21);
+  --ds-label-secondary: rgb(97, 102, 107);
+  --ds-label-tertiary: rgb(129, 133, 140);
+  --ds-label-caption: rgb(173, 178, 184);
+  --ds-label-dimmed: rgb(225, 229, 238);
+  --ds-label-foreground: #fff;
+  --ds-brand-primary: rgb(15, 17, 21);
+  --ds-primary-fill: rgb(15, 17, 21);
+  --ds-primary-hover: rgb(67, 69, 74);
+  --ds-hover: rgba(38, 49, 72, 0.06);
+  --ds-active: rgba(38, 49, 72, 0.1);
+  --ds-success: rgb(34, 197, 94);
+  --ds-error: rgb(236, 19, 19);
+  --ds-warn: var(--ds-label-secondary);
+  --ds-elevation-soft: 0 0 0 0.5px var(--ds-border-l4), 0 4px 16px rgba(0, 0, 0, 0.03), 0 0 24px rgba(0, 0, 0, 0.03);
+  --ds-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --ds-font-code: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier, 'PingFang SC', 'Microsoft YaHei';
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ds-bg-layer-1: rgb(35, 35, 36);
+    --ds-bg-module: rgb(53, 54, 56);
+    --ds-border-l1: rgba(255, 255, 255, 0.06);
+    --ds-border-l2: rgba(255, 255, 255, 0.12);
+    --ds-border-l3: rgba(255, 255, 255, 0.16);
+    --ds-border-l4: rgba(255, 255, 255, 0.2);
+    --ds-label-primary: rgb(249, 250, 251);
+    --ds-label-secondary: rgb(207, 211, 214);
+    --ds-label-tertiary: rgb(173, 178, 184);
+    --ds-label-caption: rgb(129, 133, 140);
+    --ds-label-dimmed: rgb(67, 69, 74);
+    --ds-label-foreground: rgb(15, 17, 21);
+    --ds-brand-primary: rgb(249, 250, 251);
+    --ds-primary-fill: rgb(249, 250, 251);
+    --ds-primary-hover: rgb(235, 238, 242);
+    --ds-hover: rgba(255, 255, 255, 0.08);
+    --ds-active: rgba(255, 255, 255, 0.14);
+    --ds-success: rgb(78, 209, 126);
+    --ds-error: rgb(242, 90, 90);
+    --ds-elevation-soft: 0 0 0 0.5px var(--ds-border-l4), 0 4px 16px rgba(0, 0, 0, 0.28), 0 0 24px rgba(0, 0, 0, 0.2);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ds-bg-layer-1);
+  color: var(--ds-label-primary);
+  font: 14px/22px var(--ds-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 48px 24px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---- header ---- */
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+/* The official DSH mark: black in light mode, white in dark, switched by the
+   media query inside the SVG, exactly like the app favicon. */
+.badge {
+  flex: none;
+  display: block;
+  width: 32px;
+  height: 32px;
+}
+
+.page-copy { min-width: 0; }
+
+.page-title {
+  margin: 0;
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 600;
+}
+
+.page-intro {
+  margin: 4px 0 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--ds-label-tertiary);
+}
+
+/* ---- outlined card: the settings row chrome ---- */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border: 0.5px solid var(--ds-border-l4);
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+
+.chip {
+  flex: none;
+  padding: 1px 6px;
+  border: 0.5px solid var(--ds-border-l3);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--ds-label-secondary);
+}
+
+/* ---- fields ---- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--ds-label-secondary);
+}
+
+/* Input chrome from ui-primitives Input.module.css: 32px tall, 8px radius,
+   hairline stroke that turns brand primary on focus. */
+.input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0.5px solid var(--ds-border-l4);
+  border-radius: 8px;
+  background: var(--ds-bg-layer-1);
+}
+
+.input-wrap:focus-within { border-color: var(--ds-brand-primary); }
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--ds-label-primary);
+}
+
+.input::placeholder { color: var(--ds-label-dimmed); }
+
+.reveal {
+  flex: none;
+  height: 20px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ds-label-tertiary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.reveal:hover:not(:disabled) {
+  background: var(--ds-hover);
+  color: var(--ds-label-secondary);
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ds-label-tertiary);
+}
+
+code {
+  font-family: var(--ds-font-code);
+  font-size: 12px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--ds-bg-module);
+  color: var(--ds-label-secondary);
+}
+
+/* ---- actions: DSH capsule buttons ---- */
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 18px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.button:disabled,
+.reveal:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.button.primary {
+  background: var(--ds-primary-fill);
+  color: var(--ds-label-foreground);
+}
+
+.button.primary:hover:not(:disabled) { background: var(--ds-primary-hover); }
+
+.button.outline {
+  border: 0.5px solid var(--ds-border-l3);
+  background: transparent;
+  color: var(--ds-label-primary);
+}
+
+.button.outline:hover:not(:disabled) { background: var(--ds-hover); }
+
+.button:focus-visible,
+.reveal:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ds-border-l3);
+}
+
+.feedback {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ds-label-tertiary);
+}
+
+.feedback[data-kind='ok'] { color: var(--ds-success); }
+.feedback[data-kind='error'] { color: var(--ds-error); }
+
+/* ---- filled module: nested status surface ---- */
+
+.module {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-radius: 12px;
+  background: var(--ds-bg-module);
+  padding: 14px 16px;
+}
+
+.module-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- behaviour switch: the whole row is the hit target ---- */
+
+.switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.switch-input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--ds-primary-fill);
+  cursor: pointer;
+}
+
+.switch-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.switch-title {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--ds-label-primary);
+}
+
+.module-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ds-label-caption);
+}
+
+.dot[data-state='ok'] { background: var(--ds-success); }
+.dot[data-state='error'] { background: var(--ds-error); }
+
+.facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fact {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.fact dt {
+  flex: none;
+  width: 56px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ds-label-tertiary);
+}
+
+.fact dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--ds-label-primary);
+  overflow-wrap: anywhere;
+}
+
+.fact dd code { padding: 0; background: none; }
+
+.foot {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ds-label-caption);
+}
+
+@media (max-width: 520px) {
+  .page { padding: 32px 16px 48px; }
+  .actions { flex-wrap: wrap; }
+  .button { flex: 1 1 auto; }
+  .fact { flex-direction: column; gap: 2px; }
+  .fact dt { width: auto; }
+}

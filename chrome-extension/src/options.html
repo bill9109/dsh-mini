@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSH Mini Panel · 连接设置</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+<main class="page">
+  <header class="page-head">
+    <img class="badge" id="brand-mark" src="icons/orca.svg" alt="" width="32" height="32">
+    <div class="page-copy">
+      <h1 class="page-title">Mini Panel</h1>
+      <p class="page-intro">在网页里划词或定位光标，用本机 DSH 完成改写。这里只配置扩展与本机 Host 的连接。</p>
+    </div>
+  </header>
+
+  <section class="card" aria-labelledby="connection-title">
+    <div class="card-head">
+      <h2 class="card-title" id="connection-title">本地连接</h2>
+      <span class="chip" id="state-chip" hidden></span>
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="endpoint">Bridge endpoint</label>
+      <div class="input-wrap" id="endpoint-wrap">
+        <input id="endpoint" class="input" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:18765" aria-describedby="endpoint-hint">
+      </div>
+      <p class="hint" id="endpoint-hint">只接受 <code>http://127.0.0.1:&lt;端口&gt;</code>，其他地址会被扩展拒绝。</p>
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="token">Pairing token</label>
+      <div class="input-wrap" id="token-wrap">
+        <input id="token" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴本机配对码" aria-describedby="token-hint">
+        <button class="reveal" id="reveal" type="button" aria-pressed="false">显示</button>
+      </div>
+      <p class="hint" id="token-hint">Host 首次启动时生成，位于 <code>~/.dsh/mini-panel/token</code>，权限 0600。</p>
+    </div>
+
+    <div class="actions">
+      <button class="button outline" id="test" type="button">测试连接</button>
+      <button class="button primary" id="save" type="button">保存</button>
+    </div>
+    <p class="feedback" id="feedback" role="status" aria-live="polite" hidden></p>
+  </section>
+
+  <section class="module" aria-labelledby="behavior-title">
+    <div class="module-head">
+      <h2 class="module-title" id="behavior-title">完成后</h2>
+    </div>
+    <p class="hint">
+      写入由模型通过页面工具完成，工具会回报实际落点；回复内容只做展示，不会自动写进页面。
+    </p>
+    <p class="feedback" id="behavior-feedback" role="status" aria-live="polite" hidden></p>
+  </section>
+
+  <section class="module" aria-labelledby="status-title">
+    <div class="module-head">
+      <h2 class="module-title" id="status-title">当前状态</h2>
+      <span class="dot" id="dot" data-state="unknown" role="img" aria-label="连接状态未知"></span>
+    </div>
+    <dl class="facts">
+      <div class="fact"><dt>Host</dt><dd id="fact-endpoint">—</dd></div>
+      <div class="fact"><dt>配对码</dt><dd id="fact-token">—</dd></div>
+      <div class="fact"><dt>协议</dt><dd id="fact-protocol">未探测</dd></div>
+    </dl>
+  </section>
+
+  <p class="foot">扩展只与本机回环地址通信，不读取其他站点数据；改写内容不会进入浏览器以外的其他服务。</p>
+</main>
+<script src="options.js"></script>
+</body>
+</html>

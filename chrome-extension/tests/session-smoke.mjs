@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+const endpoint = process.env.DSH_MINI_PANEL_ENDPOINT || 'http://127.0.0.1:18765';
+const token = (await readFile(process.env.DSH_MINI_PANEL_TOKEN_FILE || join(process.env.HOME, '.dsh/mini-panel/token'), 'utf8')).trim();
+const request = async (path, body) => {
+  const res = await fetch(endpoint + path, { method: body ? 'POST' : 'GET', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(120000) });
+  const data = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(data));
+  return data;
+};
+const { sessionId } = await request('/v1/sessions/new', { title: 'Selection session binding smoke' });
+console.log('SESSION', sessionId);
+await request('/v1/sessions/bind', { sessionId });
+const text = '这个方案需要进一步优化。';
+const first = await request('/v1/rewrite', { sessionId, requestId: randomUUID(), selectionId: randomUUID(), text, instruction: '改得更专业一些', url: 'https://example.test/document', title: 'Session binding fixture' });
+assert.equal(first.sessionId, sessionId);
+assert.ok(first.replacement.length);
+const second = await request('/v1/rewrite', { sessionId, requestId: randomUUID(), selectionId: randomUUID(), text, instruction: '把你上一条回复改成更短的表达', url: 'https://example.test/document', title: 'Session binding fixture' });
+assert.equal(second.sessionId, sessionId);
+assert.ok(second.replacement.length);
+console.log('PASS same persisted session resumed across two actual model turns');
+console.log('RESULTS', JSON.stringify([first.replacement, second.replacement]));
+const listing = await request('/v1/sessions');
+assert.ok(listing.sessions.some(s => s.sessionId === sessionId));
+console.log('PASS bound session remains discoverable after agent disposal');

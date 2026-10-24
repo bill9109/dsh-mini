@@ -1,0 +1,6 @@
+packages:
+  - .
+
+# The @deepseek-ai/dsh-* peers are provided by the running DSH installation, not
+# the npm registry; auto-installing them would try to fetch them and fail.
+autoInstallPeers: false

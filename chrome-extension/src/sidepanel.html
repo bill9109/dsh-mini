@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSH</title>
+<link rel="stylesheet" href="sidepanel.css">
+<body>
+  <header id="bar">
+    <span id="title">DSH</span>
+    <button id="back" type="button" title="收回到胶囊" aria-label="收回到胶囊">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4H5a1 1 0 0 0-1 1v4"/><path d="M15 20h4a1 1 0 0 0 1-1v-4"/><path d="M4 4l6 6"/><path d="M20 20l-6-6"/></svg>
+      <span>收回到胶囊</span>
+    </button>
+  </header>
+  <main id="stage">
+    <p id="status" role="status" aria-live="polite">正在连接 DSH…</p>
+    <iframe id="frame" title="DSH 对话" allow="clipboard-read; clipboard-write" hidden></iframe>
+  </main>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

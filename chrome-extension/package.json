@@ -1,0 +1,18 @@
+{
+  "name": "dsh-mini-panel-extension",
+  "private": true,
+  "scripts": {
+    "test:ui": "node tests/ui.mjs",
+    "test:background": "node --test tests/background.mjs",
+    "test:sessions": "node tests/session-smoke.mjs",
+    "test:stream": "node tests/stream-smoke.mjs",
+    "check": "node scripts/check.mjs",
+    "icons": "node scripts/icons.mjs",
+    "test:options": "node tests/options.mjs",
+    "e2e": "node tests/e2e.mjs",
+    "e2e:electron": "node tests/electron/launch.mjs",
+    "test:edit-core": "node --test tests/edit-core.test.cjs",
+    "test": "npm run check && npm run test:background && npm run test:edit-core",
+    "sync:protocol": "node scripts/sync-protocol.mjs"
+  }
+}
