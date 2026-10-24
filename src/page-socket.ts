@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { timingSafeEqual } from 'node:crypto'
 import { WebSocketServer, type WebSocket, type RawData } from 'ws'
-import { PageBroker, boundedJson, type Identity, type Json } from './page-broker.ts'
+import { PageBroker, boundedJson, type Identity, type Json, type Surface } from './page-broker.ts'
 import { trace } from './trace.ts'
 
 /**
@@ -18,9 +18,13 @@ import { trace } from './trace.ts'
  *                 start {rid, commandId, leaseId}               -> reply {rid, ...broker.start}
  *                 result {rid, commandId, leaseId, outcome}     -> reply {rid, ...broker.result}
  *                 answer {interactionId, value}                 human answer to an ask/approval
+ *                 surface {rid, surface: 'page'|'gui'}          who shows approvals/questions
  *                 ping {}                                       -> pong {}
  *   host -> page  ready {} | command {command} | ask {...} | ask-cancel {interactionId}
  *                 reply {rid, ok, ...} | pong {} | bye {code}
+ *
+ * A task that ended on the Host (lease released, expired or superseded) is closed with
+ * bye {code: 'TASK_ENDED'} and close code 4410; the page must not reconnect.
  *
  * Browsers cannot set headers on a WebSocket, so the pairing token travels in hello; the
  * upgrade itself only admits loopback origins the HTTP API admits.
@@ -41,7 +45,12 @@ export interface PageSocketOptions {
   onDetach?(taskId: string): void
   /** A socket (re)attached to the task. */
   onAttach?(taskId: string): void
+  /** The page moved the task's interactions to another surface. */
+  onSurface?(taskId: string, surface: Surface): void
 }
+
+/** Close code for a task the Host ended; the page treats it as final. */
+export const TASK_ENDED_CLOSE = 4410
 
 interface Connection {
   socket: WebSocket
@@ -180,6 +189,13 @@ export class PageSockets {
         case 'result':
           reply({ ...this.broker.result(identity, String(frame.commandId), String(frame.leaseId), frame.outcome) })
           return
+        case 'surface': {
+          if (frame.surface !== 'page' && frame.surface !== 'gui') throw Object.assign(new Error('surface must be page or gui'), { status: 400 })
+          const surface = this.broker.setSurface(identity, frame.surface)
+          this.options.onSurface?.(identity.taskId, surface)
+          reply({ ok: true, surface })
+          return
+        }
         case 'answer':
           if (typeof frame.interactionId !== 'string') throw Object.assign(new Error('interactionId required'), { status: 400 })
           this.options.onAnswer(identity.taskId, frame.interactionId, frame.value)
@@ -201,6 +217,7 @@ export class PageSockets {
   private pump(taskId: string): void {
     const set = this.connections.get(taskId)
     if (!set?.size) return
+    if (this.broker.ended(taskId)) { this.end(taskId); return }
     const connection = [...set][set.size - 1]!
     let claimed
     try {
@@ -218,7 +235,20 @@ export class PageSockets {
       // A lease that expired unclaimed-in-practice (lost frame) is re-offered here.
       this.pump(taskId)
     }
+    this.broker.expireLeases()
     this.broker.failAbsent()
+  }
+
+  /**
+   * The task no longer serves a session: tell its sockets so they stop instead of reconnecting.
+   * Only the Host can end a lease early (release, expiry, a capsule run taking the session back),
+   * so without this the extension would keep a dead task's socket open.
+   */
+  private end(taskId: string): void {
+    for (const connection of [...this.connections.get(taskId) ?? []]) {
+      this.write(connection.socket, { type: 'bye', code: 'TASK_ENDED' })
+      connection.socket.close(TASK_ENDED_CLOSE, 'task ended')
+    }
   }
 
   private drop(connection: Connection): void {

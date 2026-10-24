@@ -2,5 +2,5 @@
 # last confirmed-consistent state. Both languages carry equal authority; after
 # editing either side, bring the other along and re-record with:
 #   node scripts/verify-i18n.mjs --write
-README.md: 42719a673446f975a9ec37473979431c9e4d293e
-README.zh.md: 015ebe1f1de588500226f66c9bf676b9ace9a885
+README.md: e269a56f312a2b8beb281e1d64b230658a2011b1
+README.zh.md: 518e71f6ac83f6535936760ba190c514d16664eb

@@ -28,6 +28,8 @@ export interface Command {
     args: Record<string, Json>;
     leaseId: string;
 }
+/** Where a page task's approvals and questions are shown. */
+export type Surface = 'page' | 'gui';
 /** Why a submit was refused before queueing because no page can execute it. */
 export type Presence = 'connected' | 'pending' | 'not-connected' | 'disconnected';
 export declare const failure: (code: string, message: string, extra?: Record<string, Json>) => Outcome;
@@ -52,6 +54,7 @@ export declare class PageBroker {
     private readonly maxCommands;
     private readonly connectGraceMs;
     private readonly presenceTtlMs;
+    private readonly leaseGraceMs;
     private readonly listeners;
     constructor(options?: {
         now?: () => number;
@@ -61,6 +64,7 @@ export declare class PageBroker {
         maxCommands?: number;
         connectGraceMs?: number;
         presenceTtlMs?: number;
+        leaseGraceMs?: number;
     });
     /** Observe queue changes for one task (new command, settled command, cancelled task). */
     onChange(listener: (taskId: string) => void): () => void;
@@ -74,8 +78,29 @@ export declare class PageBroker {
     taskForSession(sessionId: string): {
         taskId: string;
         documentId: string;
+        surface: Surface;
     } | undefined;
+    /** The task's current interaction surface, or undefined when it is unknown or inactive. */
+    taskForSurface(taskId: string): Surface | undefined;
+    /** True when the task exists but no longer serves a session: its sockets have nothing left to do. */
+    ended(taskId: string): boolean;
     bind(sessionId: string, page: PageSession, signal: AbortSignal): () => void;
+    /**
+     * Bind a page task to a session for as long as the side panel shows it, independent of any run.
+     * Its interactions belong to the GUI from the start: the capsule is hidden while a lease exists.
+     * A previous lease on the same session is replaced; a run in progress is refused (409) so the
+     * caller retries once it settles.
+     */
+    bindLease(sessionId: string, page: PageSession): {
+        taskId: string;
+    };
+    /** The page that holds a lease gives it up (panel closed). Authenticated like every page call. */
+    releaseLease(identity: Identity): void;
+    /** Move the task's human interactions between the capsule and the GUI. @returns the new surface. */
+    setSurface(identity: Identity, surface: Surface): Surface;
+    private endLease;
+    /** Release leases whose page has not proved it is alive for the grace period. */
+    expireLeases(): void;
     submit(sessionId: string | undefined, kind: 'read' | 'edit', args: Record<string, Json>, signal?: AbortSignal): Promise<Outcome>;
     claim(identity: Identity): {
         command: Command | null;

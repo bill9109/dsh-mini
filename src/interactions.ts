@@ -140,7 +140,21 @@ export class Interactions {
 
   /** A page (re)connected: show it every interaction still open for its task. */
   reattach(taskId: string): void {
+    if (this.broker.taskForSurface(taskId) === 'gui') { this.handOver(taskId); return }
     for (const p of this.pending.values()) if (p.taskId === taskId) this.sockets.send(taskId, p.frame)
+  }
+
+  /**
+   * The page moved its interactions. Moving to the GUI hands every open one to the rest of the
+   * waterfall right away (the capsule that would show it is hidden); moving back only affects the
+   * next ask, because an interaction already answered by the GUI cannot be taken back.
+   */
+  surface(taskId: string, surface: 'page' | 'gui'): void {
+    if (surface === 'gui') this.handOver(taskId)
+  }
+
+  private handOver(taskId: string): void {
+    for (const p of [...this.pending.values()]) if (p.taskId === taskId) p.delegate()
   }
 
   close(): void {
@@ -154,7 +168,8 @@ export class Interactions {
     if (this.closed) return undefined
     const sessionId = sessionOf(agent)
     const task = sessionId ? this.broker.taskForSession(sessionId) : undefined
-    return task && this.sockets.connected(task.taskId) ? task.taskId : undefined
+    // A task whose capsule is hidden (side panel open, or a lease) is answered by the DSH GUI.
+    return task && task.surface === 'page' && this.sockets.connected(task.taskId) ? task.taskId : undefined
   }
 
   private open<T>(

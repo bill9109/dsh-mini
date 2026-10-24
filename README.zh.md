@@ -87,7 +87,11 @@ pnpm run test:extension   # 扩展：check + background + edit-core
 
 - `tests/host-http.host.spec.ts` 有 19 项失败：测试 harness 没有提供 Host 现在要求的 `tools` 服务。其余 Host 测试套件通过。
 - `chrome-extension/tests/ui.mjs`、`options.mjs`、`e2e.mjs`、`sidepanel-e2e.mjs` 通过 DSH checkout 里的 Playwright 驱动真实浏览器。需要设置 `DSH_CHECKOUT`（侧边栏测试还需要 `DSH_E2E_CHROME`）。
-- 真机点击打开侧边栏、收回会话后胶囊重新出现，这两项没有在真实浏览器里验证过。
+- 真机点击打开侧边栏、侧边栏租约（从侧边栏的回合里编辑网页）、收回会话后胶囊重新出现，这三项没有在真实浏览器里验证过。
+
+### 侧边栏与网页
+
+点「在侧边栏中展开」后，只要侧边栏还显示这个会话，网页就一直挂在会话上。你在侧边栏里发起的回合可以读写这个网页，初始目标是交过来的那段选区。因为胶囊已经隐藏，审批和提问都显示在侧边栏里。关闭侧边栏、关闭或跳转标签页、或者重新从胶囊发起一次任务，都会解除绑定。
 
 ## 社区
 

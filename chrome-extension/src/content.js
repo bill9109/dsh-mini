@@ -1395,6 +1395,8 @@
       if(channel)await channel.stop();
       if(requestId===id)requestId=null;
       if(currentPageTask===task)currentPageTask=null;
+      // Handed to the side panel mid-run: the panel keeps the page once this run lets it go.
+      if(handedOff&&!leaseTask)void startLease();
     }
   }
 
@@ -1415,17 +1417,84 @@
     const pinned = anchor;
     const reply = await send({ type: 'open-panel', url: pinned.url, title: pinned.title, sessionId: binding?.sessionId });
     if (!reply?.ok) { if (panel) status(reply?.error?.message || '无法打开侧边栏。', true); return; }
-    handedOff = { anchor: pinned };
+    handedOff = { anchor: pinned, retries: 0 };
     menu(false);
     // Leave the run alone (it continues on the Host) and drop only the capsule's own surface.
     section.hidden = true; el('marker').hidden = true;
+    // The capsule that would show this run's approvals is hidden now: the panel answers them.
+    if (busy()) { hideAsk(); try { streamPort?.postMessage({ type: 'surface', surface: 'gui' }); } catch { /* run already ended */ } }
+    else void startLease();
   }
+
+  /**
+   * Side-panel lease: keep this page reachable for every turn the panel starts, not only the run the
+   * capsule began. It reuses the handed-over selection as the initial target and consumes page
+   * commands exactly like a capsule run; its approvals and questions are answered in the panel.
+   */
+  let leaseTask = null;
+  const LEASE_RETRIES = 5;
+  async function startLease() {
+    if (!handedOff || leaseTask || currentPageTask) return;
+    const pinned = handedOff.anchor;
+    if (location.href !== pinned.url) { panelLog('lease/skip', { reason: 'url-changed' }); return; }
+    let port = null;
+    try { port = chrome.runtime.connect({ name: 'dsh-lease' }); } catch { port = null; }
+    if (!port) return;
+    const id = crypto.randomUUID();
+    const page = { version: 2, taskId: id, selectionId: pinned.selectionId, documentId: pageDocumentId, token: crypto.randomUUID() + crypto.randomUUID(), url: location.href };
+    const control = new AbortController();
+    const task = { page, control, port, kernel: null, channel: null, anchor: pinned, lease: true };
+    leaseTask = task;
+    const bridge = async spec => {
+      const cmd = task.channel?.currentCommand;
+      const message = cmd ? { type: 'page-model', pageSession: page, commandId: cmd.commandId, leaseId: cmd.leaseId, spec } : { type: 'page-inspect', pageSession: page, spec };
+      const reply = await send(message);
+      return reply?.ok ? reply.result : { ok: false, code: 'BRIDGE_UNAVAILABLE', message: reply?.error?.message || '编辑器桥不可用', modification: spec.action === 'edit' ? 'unknown' : 'not-modified', verification: 'none', retryable: false };
+    };
+    task.kernel = new globalThis.DSHPageKernel.Kernel({ document, location, documentId: pageDocumentId, bridge });
+    task.channel = new globalThis.DSHPageChannel.Channel({ send, kernel: task.kernel });
+    const end = reason => {
+      if (leaseTask !== task) return;
+      leaseTask = null;
+      control.abort();
+      void task.channel.stop();
+      try { port.disconnect(); } catch { /* already gone */ }
+      panelLog('lease/end', { reason });
+      // An unexpected loss (worker restart, socket drop) while the panel is still open: bind again.
+      if (handedOff && reason !== 'host-ended' && reason !== 'failed' && handedOff.retries < LEASE_RETRIES) {
+        handedOff.retries += 1;
+        setTimeout(() => void startLease(), 500 * handedOff.retries);
+      }
+    };
+    task.end = end;
+    port.onDisconnect.addListener(() => end('port'));
+    port.onMessage.addListener(async reply => {
+      if (!reply || leaseTask !== task) return;
+      if (reply.type === 'wake') { task.channel.wake(); return; }
+      if (reply.type === 'ended') { end(reply.code === 'TASK_ENDED' ? 'host-ended' : 'socket'); return; }
+      if (reply.type === 'error') { panelLog('lease/failed', { message: String(reply.message || '').slice(0, 80) }); end('failed'); return; }
+      if (reply.type !== 'ready') return;
+      if (reply.sessionId) binding = { sessionId: reply.sessionId };
+      handedOff.retries = 0;
+      // The selection may have been rewritten by the run that preceded the handoff. begin() then
+      // refuses the stale target but still binds the task, so document-wide reads keep working.
+      const initial = await task.kernel.begin(page, pinned).catch(error => ({ ok: false, code: error?.code }));
+      panelLog('lease/ready', { initial: initial?.ok ? 'target' : String(initial?.code || 'none') });
+      if (leaseTask !== task || control.signal.aborted) return;
+      await task.channel.start(page, control.signal);
+    });
+    port.postMessage({ type: 'lease', requestId: id, selectionId: pinned.selectionId, url: page.url, title: pinned.title, pageSession: page });
+  }
+  function stopLease() { leaseTask?.end?.('panel-closed'); }
 
   /** The panel handed back: show the capsule again where it was, on the same conversation. */
   function fromPanel(sessionId) {
     if (!handedOff) return;
     const back = handedOff.anchor;
     handedOff = null;
+    stopLease();
+    // A run still in flight shows its next approval in the capsule again.
+    if (busy()) { try { streamPort?.postMessage({ type: 'surface', surface: 'page' }); } catch { /* run already ended */ } }
     if (sessionId) binding = { sessionId };
     if (!anchor) anchor = back;
     panel = true;

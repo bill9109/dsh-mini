@@ -72,6 +72,13 @@ export declare class Interactions {
     detach(taskId: string): void;
     /** A page (re)connected: show it every interaction still open for its task. */
     reattach(taskId: string): void;
+    /**
+     * The page moved its interactions. Moving to the GUI hands every open one to the rest of the
+     * waterfall right away (the capsule that would show it is hidden); moving back only affects the
+     * next ask, because an interaction already answered by the GUI cannot be taken back.
+     */
+    surface(taskId: string, surface: 'page' | 'gui'): void;
+    private handOver;
     close(): void;
     private target;
     private open;

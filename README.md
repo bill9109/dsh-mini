@@ -87,7 +87,11 @@ Known gaps:
 
 - `tests/host-http.host.spec.ts` has 19 failing cases. Its test harness does not provide the `tools` service the Host now requires. The other Host suites pass.
 - `chrome-extension/tests/ui.mjs`, `options.mjs`, `e2e.mjs` and `sidepanel-e2e.mjs` drive a real browser through Playwright from the DSH checkout. Set `DSH_CHECKOUT` (and `DSH_E2E_CHROME` for the side-panel test).
-- Opening the side panel from a real click, and the capsule coming back after you reclaim a session, have not been verified on a real browser.
+- Opening the side panel from a real click, the side-panel lease (editing the page from a panel turn), and the capsule coming back after you reclaim a session have not been verified on a real browser.
+
+### Side panel and the page
+
+"Expand in side panel" keeps the page attached to the conversation while the panel shows it. Turns you start in the panel can read and edit that page, and the handed-over selection is the starting target. Approvals and questions appear in the panel, because the capsule is hidden. Closing the panel, closing or navigating the tab, or starting a new capsule run ends the attachment.
 
 ## Community
 

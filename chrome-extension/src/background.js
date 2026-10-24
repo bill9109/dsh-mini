@@ -62,6 +62,7 @@ function openPageSocket(task, endpoint, pairingToken, onFrame) {
       if (frame.type === 'command') { if (frame.command && !state.queue.some(c => c.commandId === frame.command.commandId)) state.queue.push(frame.command); onFrame({ type: 'wake' }); return; }
       if (frame.type === 'reply') { const w = state.waiters.get(frame.rid); if (w) { state.waiters.delete(frame.rid); w(frame); } return; }
       if (frame.type === 'pong') return;
+      if (frame.type === 'bye' && frame.code === 'TASK_ENDED') state.ended = true;
       onFrame(frame);
     };
     ws.onclose = event => {
@@ -69,8 +70,9 @@ function openPageSocket(task, endpoint, pairingToken, onFrame) {
       for (const w of state.waiters.values()) w(null);
       state.waiters.clear();
       bgLog('socket/closed', { taskId: String(task.page.taskId).slice(-8), code: event.code }, event.code === 1000 ? 'info' : 'warn');
-      // Auth failures are final; anything else reconnects while the task is still running.
-      if (state.closed || !task.active || event.code === 4401 || event.code === 4403 || state.retries >= 5) return;
+      // Auth failures and a task the Host ended (4410) are final; anything else reconnects while the task runs.
+      const final = state.closed || state.ended || !task.active || event.code === 4401 || event.code === 4403 || event.code === 4410 || state.retries >= 5;
+      if (final) { if (!state.closed) onFrame({ type: 'closed', code: event.code, ended: state.ended || event.code === 4410 }); return; }
       state.retries++;
       setTimeout(connect, Math.min(200 * 2 ** state.retries, 2000));
     };
@@ -266,6 +268,94 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   if (keys.length) await chrome.storage.session.remove(keys);
 });
 
+/** Tell the Host who shows this task's approvals and questions; socket first, HTTP as fallback. */
+async function setSurface(task, surface) {
+  try {
+    const viaSocket = await task.socket?.rpc({ type: 'surface', surface });
+    if (viaSocket?.ok) { bgLog('task/surface', { taskId: String(task.page.taskId).slice(-8), surface }); return; }
+    const { endpoint, pairingToken } = await loadConfig();
+    await createRequest(endpoint, pairingToken, new AbortController())('/v2/page/surface', { ...taskIdentity(task), surface });
+    bgLog('task/surface', { taskId: String(task.page.taskId).slice(-8), surface, via: 'http' });
+  } catch (error) {
+    bgLog('task/surface-failed', { surface, message: String(error?.message || error).slice(0, 80) }, 'warn');
+  }
+}
+
+/**
+ * Side-panel lease. While the panel shows a tab's conversation, the content script holds one
+ * `dsh-lease` port. The worker binds the page to that session on the Host for as long as the port
+ * lives, so a turn started from the panel can still read and edit the page the capsule was handed
+ * over from. Approvals and questions for it are answered in the panel (the GUI). The port closing
+ * (panel closed, tab closed, page navigated, extension reloaded) releases the lease; the Host also
+ * expires a lease whose page stopped answering.
+ */
+const LEASE_BIND_RETRIES = 8;
+chrome.runtime.onConnect.addListener(port => {
+  if (port.name !== 'dsh-lease') return;
+  let task = null, ended = false;
+  const post = payload => { try { port.postMessage(payload); } catch { /* the page went away */ } };
+  const teardown = async (reason) => {
+    if (ended) return;
+    ended = true;
+    if (!task) return;
+    const owned = task;
+    owned.active = false;
+    owned.expires = Date.now(); // let rememberTask's sweep drop it
+    owned.socket?.close();
+    bgLog('lease/end', { taskId: String(owned.page.taskId).slice(-8), reason });
+    try {
+      const { endpoint, pairingToken } = await loadConfig();
+      await createRequest(endpoint, pairingToken, new AbortController())('/v1/panel/lease/release', taskIdentity(owned));
+    } catch { /* already released, expired, or the Host is gone: the Host's own sweep covers it */ }
+  };
+  port.onDisconnect.addListener(() => { void teardown('port'); });
+  port.onMessage.addListener(message => {
+    if (message?.type !== 'lease' || task || ended) return;
+    const sender = port.sender;
+    void (async () => {
+      try {
+        const tabId = sender?.tab?.id;
+        if (!Number.isInteger(tabId)) throw new Error('此操作需要在网页中使用。');
+        const { endpoint, pairingToken } = await loadConfig();
+        const request = createRequest(endpoint, pairingToken, new AbortController());
+        // The panel shows the session the capsule is bound to; wait until open-panel resolved it.
+        const entry = panelTabs.get(tabId);
+        await entry?.ready;
+        const sessionId = panelTabs.get(tabId)?.sessionId
+          || (await boundSession(await documentKey(sender, message, endpoint.href, pairingToken), request, message)).sessionId;
+        const owned = rememberTask(sender, message);
+        owned.lease = true;
+        owned.expires = Infinity;
+        task = owned;
+        // A capsule run that just finished may not have released the session on the Host yet.
+        for (let attempt = 0; ; attempt++) {
+          if (ended) return;
+          try {
+            await request('/v1/panel/lease', { sessionId, taskId: message.requestId, selectionId: message.selectionId, url: message.url, pageSession: message.pageSession });
+            break;
+          } catch (error) {
+            if (attempt >= LEASE_BIND_RETRIES || !/HTTP 409/.test(String(error?.message))) throw error;
+            await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+          }
+        }
+        if (ended) return;
+        owned.ready = true;
+        owned.socket = openPageSocket(owned, endpoint, pairingToken, frame => {
+          if (frame.type === 'wake') post({ type: 'wake' });
+          else if (frame.type === 'closed') { post({ type: 'ended', code: frame.ended ? 'TASK_ENDED' : 'DISCONNECTED' }); try { port.disconnect(); } catch { /* gone */ } void teardown(frame.ended ? 'host-ended' : 'socket'); }
+        });
+        bgLog('lease/bound', { taskId: String(owned.page.taskId).slice(-8), sessionId });
+        post({ type: 'ready', sessionId });
+      } catch (error) {
+        bgLog('lease/failed', { message: String(error?.message || error).slice(0, 120) }, 'error');
+        post({ type: 'error', message: error?.message || '侧边栏无法连接网页。' });
+        try { port.disconnect(); } catch { /* gone */ }
+        void teardown('failed');
+      }
+    })();
+  });
+});
+
 /**
  * Live rewrite channel. The content script owns one port per task and renders the
  * model's reasoning and answer while the turn runs; the settled replacement still
@@ -280,6 +370,11 @@ chrome.runtime.onConnect.addListener(port => {
     if (message?.type === 'answer') {
       // A human answer from the panel; only the task that owns this port may send one.
       if (pageTask?.active && typeof message.interactionId === 'string') pageTask.socket?.send({ type: 'answer', interactionId: message.interactionId, value: message.value ?? null });
+      return;
+    }
+    if (message?.type === 'surface') {
+      // The capsule was handed to the side panel (or back) while this run is in flight.
+      if (pageTask?.active && (message.surface === 'page' || message.surface === 'gui')) void setSurface(pageTask, message.surface);
       return;
     }
     if (!message || message.type === 'cancel') { stop(); return; }

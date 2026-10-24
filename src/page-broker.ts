@@ -23,7 +23,17 @@ interface Task {
   boundAt: number; lastSeen: number; sockets: number
   /** Once a socket served this task, its closing is authoritative: a held lease no longer proves presence. */
   viaSocket: boolean
+  /**
+   * A side-panel lease: the task outlives any single run and is bound to the session for as long as
+   * the side panel shows it, so every turn the panel starts can reach the page. A run-bound task
+   * (`bind`) ends with its HTTP request instead.
+   */
+  lease: boolean
+  /** Who answers the run's human interactions: the in-page capsule, or the DSH GUI (side panel). */
+  surface: Surface
 }
+/** Where a page task's approvals and questions are shown. */
+export type Surface = 'page' | 'gui'
 /** Why a submit was refused before queueing because no page can execute it. */
 export type Presence = 'connected' | 'pending' | 'not-connected' | 'disconnected'
 export const failure = (code: string, message: string, extra: Record<string, Json> = {}): Outcome =>
@@ -78,8 +88,9 @@ export class PageBroker {
   private readonly maxCommands: number
   private readonly connectGraceMs: number
   private readonly presenceTtlMs: number
+  private readonly leaseGraceMs: number
   private readonly listeners = new Set<(taskId: string) => void>()
-  constructor(options: { now?: () => number; timeoutMs?: number; leaseMs?: number; retentionMs?: number; maxCommands?: number; connectGraceMs?: number; presenceTtlMs?: number } = {}) {
+  constructor(options: { now?: () => number; timeoutMs?: number; leaseMs?: number; retentionMs?: number; maxCommands?: number; connectGraceMs?: number; presenceTtlMs?: number; leaseGraceMs?: number } = {}) {
     this.now = options.now ?? Date.now
     this.timeoutMs = options.timeoutMs ?? 60_000
     this.leaseMs = options.leaseMs ?? 10_000
@@ -90,6 +101,9 @@ export class PageBroker {
     this.connectGraceMs = options.connectGraceMs ?? 5_000
     // Without a live socket, an HTTP-polling page counts as present for this long after its last claim.
     this.presenceTtlMs = options.presenceTtlMs ?? 3_000
+    // A lease whose page stopped proving it is alive (tab closed, extension reloaded, worker gone for
+    // good) is released after this long, so it never pins a session to a page that cannot answer.
+    this.leaseGraceMs = options.leaseGraceMs ?? 30_000
   }
   /** Observe queue changes for one task (new command, settled command, cancelled task). */
   onChange(listener: (taskId: string) => void): () => void {
@@ -131,30 +145,96 @@ export class PageBroker {
     return now - task.boundAt <= this.connectGraceMs ? 'pending' : 'not-connected'
   }
   /** Session id -> active task id, for routing human interactions to the page that owns the run. */
-  taskForSession(sessionId: string): { taskId: string; documentId: string } | undefined {
+  taskForSession(sessionId: string): { taskId: string; documentId: string; surface: Surface } | undefined {
     const taskId = this.sessions.get(sessionId)
     const task = taskId ? this.tasks.get(taskId) : undefined
-    return task?.active ? { taskId: task.page.taskId, documentId: task.page.documentId } : undefined
+    return task?.active ? { taskId: task.page.taskId, documentId: task.page.documentId, surface: task.surface } : undefined
+  }
+  /** The task's current interaction surface, or undefined when it is unknown or inactive. */
+  taskForSurface(taskId: string): Surface | undefined {
+    const task = this.tasks.get(taskId)
+    return task?.active ? task.surface : undefined
+  }
+  /** True when the task exists but no longer serves a session: its sockets have nothing left to do. */
+  ended(taskId: string): boolean {
+    const task = this.tasks.get(taskId)
+    return task !== undefined && !task.active
   }
   bind(sessionId: string, page: PageSession, signal: AbortSignal): () => void {
     this.sweep()
     if (this.closed || signal.aborted) throw error(409, 'Page request is no longer active')
     if (!id(sessionId)) throw error(500, 'Execution agent has no actual session id')
+    // A run started from the capsule takes the page back from a side-panel lease on the same session.
+    this.endLease(sessionId, 'superseded by a page run')
     if (this.tasks.has(page.taskId) || this.sessions.has(sessionId)) throw error(409, 'Page task or session is already bound')
     if (this.tasks.size >= this.maxCommands) throw error(429, 'Page task capacity exceeded')
     const release = (): void => this.cancelTask(page.taskId)
-    const task: Task = { page: { ...page }, sessionId, active: true, expires: Infinity, detach: () => signal.removeEventListener('abort', release), boundAt: this.now(), lastSeen: 0, sockets: 0, viaSocket: false }
+    const task: Task = { page: { ...page }, sessionId, active: true, expires: Infinity, detach: () => signal.removeEventListener('abort', release), boundAt: this.now(), lastSeen: 0, sockets: 0, viaSocket: false, lease: false, surface: 'page' }
     this.tasks.set(page.taskId, task)
     this.sessions.set(sessionId, page.taskId)
     signal.addEventListener('abort', release, { once: true })
     return release
+  }
+  /**
+   * Bind a page task to a session for as long as the side panel shows it, independent of any run.
+   * Its interactions belong to the GUI from the start: the capsule is hidden while a lease exists.
+   * A previous lease on the same session is replaced; a run in progress is refused (409) so the
+   * caller retries once it settles.
+   */
+  bindLease(sessionId: string, page: PageSession): { taskId: string } {
+    this.sweep()
+    if (this.closed) throw error(503, 'Page broker is closed')
+    if (!id(sessionId)) throw error(400, 'invalid sessionId')
+    this.endLease(sessionId, 'replaced by a new lease')
+    if (this.sessions.has(sessionId)) throw error(409, 'Session has a page run in progress')
+    if (this.tasks.has(page.taskId)) throw error(409, 'Page task is already bound')
+    if (this.tasks.size >= this.maxCommands) throw error(429, 'Page task capacity exceeded')
+    const task: Task = { page: { ...page }, sessionId, active: true, expires: Infinity, detach: () => {}, boundAt: this.now(), lastSeen: 0, sockets: 0, viaSocket: false, lease: true, surface: 'gui' }
+    this.tasks.set(page.taskId, task)
+    this.sessions.set(sessionId, page.taskId)
+    trace('lease/bound', { taskId: page.taskId, sessionId })
+    return { taskId: page.taskId }
+  }
+  /** The page that holds a lease gives it up (panel closed). Authenticated like every page call. */
+  releaseLease(identity: Identity): void {
+    const task = this.authorize(identity)
+    if (!task.lease) throw error(409, 'Page task is not a lease')
+    trace('lease/released', { taskId: task.page.taskId })
+    this.cancelTask(task.page.taskId)
+  }
+  /** Move the task's human interactions between the capsule and the GUI. @returns the new surface. */
+  setSurface(identity: Identity, surface: Surface): Surface {
+    const task = this.authorize(identity)
+    if (!task.active) throw error(409, 'Page task is no longer active')
+    task.surface = surface
+    trace('task/surface', { taskId: task.page.taskId, surface })
+    return surface
+  }
+  private endLease(sessionId: string, reason: string): void {
+    const taskId = this.sessions.get(sessionId)
+    const task = taskId ? this.tasks.get(taskId) : undefined
+    if (!task?.active || !task.lease) return
+    trace('lease/ended', { taskId: task.page.taskId, reason }, 'warn')
+    this.cancelTask(task.page.taskId)
+  }
+  /** Release leases whose page has not proved it is alive for the grace period. */
+  expireLeases(): void {
+    const now = this.now()
+    for (const task of [...this.tasks.values()]) {
+      if (!task.active || !task.lease || task.sockets > 0) continue
+      const since = task.lastSeen > 0 ? task.lastSeen : task.boundAt
+      if (now - since > this.leaseGraceMs) {
+        trace('lease/expired', { taskId: task.page.taskId }, 'warn')
+        this.cancelTask(task.page.taskId)
+      }
+    }
   }
   submit(sessionId: string | undefined, kind: 'read' | 'edit', args: Record<string, Json>, signal?: AbortSignal): Promise<Outcome> {
     this.sweep()
     const commandId = randomUUID()
     const taskId = sessionId ? this.sessions.get(sessionId) : undefined
     const task = taskId ? this.tasks.get(taskId) : undefined
-    if (this.closed || !task?.active || signal?.aborted) return Promise.resolve(failure('NO_ACTIVE_PAGE_TASK', 'No active page task for this execution session.', { commandId }))
+    if (this.closed || !task?.active || signal?.aborted) return Promise.resolve(failure('NO_ACTIVE_PAGE_TASK', 'No browser page is attached to this session. Nothing was sent; tell the user to select the target on the page with the extension (the capsule), or reopen the side panel from it.', { commandId }))
     if (this.entries.size >= this.maxCommands) return Promise.resolve(failure('BROKER_CAPACITY', 'Page command capacity exceeded.', { commandId }))
     // Fail fast when no page can execute this. Waiting out the command timeout only hid the cause.
     const presence = this.presence(task.page.taskId)

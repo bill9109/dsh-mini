@@ -1,6 +1,6 @@
 {
   "name": "dsh-mini",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH Mini: use DeepSeek Harness from any web page. Cordis plugin (Host + Web UI) that pairs with the standalone Chrome extension in chrome-extension/.",
   "keywords": [
     "deepseek",
