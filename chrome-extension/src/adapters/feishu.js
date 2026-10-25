@@ -24,6 +24,12 @@ async function write(ctx, t, before, a, b, op) {
   const result = ctx.validateOutcome(raw);
   if (!result.ok) { alog('write/fail', { code: result.code, modification: result.modification, ok: false }); return { after: null, result, passthrough: true }; }
   alog('write/ok', { code: result.code, modification: result.modification, ok: true });
+  // Block inserts and deletes leave the target elsewhere or gone; the engine names the block to continue from.
+  if (result.retargetRecordId !== undefined) {
+    if (!result.retargetRecordId || !result.snapshot) return { after: null, result };
+    const snap = { ...result.snapshot, adapter: 'feishu', verification: result.verification };
+    return { after: snap, result, retarget: { adapter: 'feishu', recordId: result.retargetRecordId, kind: 'block', start: 0, end: String(snap.text || '').length } };
+  }
   return { after: { ...result.snapshot, adapter: 'feishu', verification: result.verification }, result };
 }
 return { snapshot, write };

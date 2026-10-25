@@ -9,7 +9,7 @@
  * a stale list fails as an unexplained "Cannot find module '@deepseek-ai/dsh-…'".
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 /** Locate the dsh checkout: DSH_CHECKOUT wins, else walk the `dsh` launcher symlink chain. */
@@ -64,16 +64,29 @@ export function workspacePackages(checkout) {
   return found
 }
 
+/** Where a real node_modules waits while the build-only link occupies its place. */
+const PARKED = 'node_modules.dsh-parked'
+
 /**
  * Link `<root>/node_modules` at the checkout's install, then expose every
  * workspace package inside it. Returns the disposer that drops the link so
  * packaging never picks it up.
+ *
+ * A real node_modules (the `pnpm install --prod` that DSH loads `ws` from) is
+ * moved aside, not deleted, and put back by the disposer. Deleting it made the
+ * Host fail to import on the next DSH start (ERR_MODULE_NOT_FOUND 'ws').
  * @param checkout - resolved dsh checkout.
  * @param root - repository root that receives the temporary link.
  */
 export function linkCheckout(checkout, root) {
   const link = join(root, 'node_modules')
-  rmSync(link, { recursive: true, force: true })
+  const parked = join(root, PARKED)
+  // A previous run that died before its disposer left the real install parked: recover it first.
+  if (existsSync(parked) && !existsSync(link)) renameSync(parked, link)
+  let real = false
+  try { real = !lstatSync(link).isSymbolicLink() } catch { /* nothing there */ }
+  if (real) { rmSync(parked, { recursive: true, force: true }); renameSync(link, parked) }
+  else rmSync(link, { recursive: true, force: true })
   symlinkSync(join(checkout, 'node_modules'), link, 'dir')
 
   // Workspace packages are not hoisted to the root node_modules.
@@ -105,5 +118,8 @@ export function linkCheckout(checkout, root) {
     }
   }
 
-  return () => rmSync(link, { recursive: true, force: true })
+  return () => {
+    rmSync(link, { recursive: true, force: true })
+    if (real && existsSync(parked)) renameSync(parked, link)
+  }
 }

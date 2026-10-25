@@ -58,7 +58,7 @@ test('unchecked surroundings are reported as unknown, not confirmed',async()=>{
 test('formatting runs survive into the read target only when observable',()=>{
  let n=0;const kernel=new Kernel({document:{},location:{href:'https://example.test/',hostname:'example.test'},documentId:'d',id:()=>String(++n)});
  const withRuns=kernel.publicTarget({ref:'x',kind:'range',start:0,end:2},{revision:'r',text:'ab',kind:'text',adapter:'feishu',editable:true,capabilities:{},runs:[{start:0,end:1,text:'a',marks:{bold:true}},{start:1,end:2,text:'b',marks:{bold:false}}]});
- assert.equal(withRuns.runs.length,2);assert.equal(withRuns.runs[0].marks.bold,true);assert.equal(withRuns.runsTruncated,false);
+ assert.equal(withRuns.runs.length,2);assert.equal(withRuns.runs[0].marks.bold,true);assert.equal('runsTruncated' in withRuns,false);assert.deepEqual(withRuns.runs[0].marks,{bold:true});assert.deepEqual(withRuns.runs[1].marks,{});
  const without=kernel.publicTarget({ref:'y',kind:'range',start:0,end:1},{revision:'r',text:'a',kind:'text',adapter:'input',editable:true,capabilities:{}});
  assert.equal('runs' in without,false);
 });
@@ -127,3 +127,21 @@ test('range-outside proof covers every attribute, not just the managed formats',
  const range=await f.kernel.read({scope:'range',at:r.targetRef});
  assert.equal(range.ok,false);
 });test('lost result report is retried without another edit',async()=>{let edits=0,reports=0;let channel;const page={taskId:'t',documentId:'d'},c={version:2,taskId:'t',documentId:'d',commandId:'c',leaseId:'l',kind:'edit'};channel=new Channel({delay:async()=>{},kernel:{execute:async()=>{edits++;return {ok:true,code:'EDIT_APPLIED',modification:'modified',verification:'editor-model',retryable:false}}},send:async m=>{if(m.type==='page-claim')return {ok:true,command:c};if(m.type==='page-start')return {ok:true,execute:true};if(m.type==='page-result'){reports++;if(reports===1)return {ok:false};channel.stopped=true;return {ok:true};}}});await channel.start(page);assert.equal(edits,1);assert.equal(reports,2);});
+
+test('image blocks surface their media metadata in public targets',()=>{
+ let n=0;const kernel=new Kernel({document:{},location:{href:'https://example.test/',hostname:'example.test'},documentId:'d',id:()=>String(++n)});
+ const media={kind:'image',name:'a.png',mimeType:'image/png',bytes:10,width:4,height:3,token:'tok',caption:''};
+ const pub=kernel.publicTarget({ref:'x',kind:'block',start:0,end:0},{revision:'r',text:'',kind:'image',adapter:'feishu',editable:false,capabilities:{},media});
+ assert.deepEqual(pub.media,media);assert.equal(pub.blockType,'image');
+ assert.equal('media' in kernel.publicTarget({ref:'y',kind:'block',start:0,end:1},{revision:'r',text:'a',kind:'text',adapter:'feishu',editable:true,capabilities:{}}),false);
+});
+
+test('targets leave out internals and defaults; lists share one capability set and clip long text',()=>{
+ let n=0;const kernel=new Kernel({document:{},location:{href:'https://example.test/',hostname:'example.test'},documentId:'d',id:()=>String(++n)});
+ const caps={operations:['replace-block'],contentTypes:['plain']};
+ const one=kernel.publicTarget({ref:'x',kind:'block',adapter:'feishu',recordId:'rec',start:0,end:0},{revision:'r',text:'hello',kind:'text',adapter:'feishu',editable:true,capabilities:caps});
+ for(const k of ['adapter','recordId','truncated','editable'])assert.equal(k in one,false,k);
+ assert.deepEqual(one.capabilities,caps);
+ const locked=kernel.publicTarget({ref:'y',kind:'block',start:0,end:0},{revision:'r',text:'',kind:'image',editable:false,capabilities:caps});
+ assert.equal(locked.editable,false);assert.equal('capabilities' in locked,false);
+});

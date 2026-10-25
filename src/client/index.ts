@@ -16,6 +16,7 @@
 import { createElement as h, useEffect, useState } from 'react'
 import { Button, IconChevronDownOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { followPanelSession, type NavigationLists, type WorkspaceNavigator } from './panel-session.ts'
+import { SettingsPage, SETTINGS_PAGE_CSS } from './settings-page.ts'
 
 export const name = 'dsh-mini-panel-client'
 
@@ -75,13 +76,14 @@ function readPairing(value: Record<string, unknown>): PairingInfo {
   }
 }
 
-function Panel(): ReturnType<typeof h> {
-  const [state, setState] = useState<PanelState>({ phase: 'loading', open: false })
+interface PanelProps { defaultOpen?: boolean }
+function Panel(props: PanelProps): ReturnType<typeof h> {
+  const [state, setState] = useState<PanelState>({ phase: 'loading', open: props.defaultOpen === true })
 
   useEffect(() => {
     let alive = true
     void call(ROUTE, 'GET').then((value) => {
-      if (alive) setState({ phase: 'ready', open: false, info: readPairing(value) })
+      if (alive) setState(previous => ({ phase: 'ready', open: previous.open, info: readPairing(value) }))
     }).catch((error: unknown) => {
       if (alive) setState({ phase: 'error', open: true, message: error instanceof Error ? error.message : String(error) })
     })
@@ -136,7 +138,7 @@ function Panel(): ReturnType<typeof h> {
 export function apply(ctx: { effect(callback: () => () => void, label: string): void; inject(services: readonly string[], callback: (scope: { effect(callback: () => () => void, label: string): void; uiWorkspace: WorkspaceNavigator } & NavigationLists) => void): void; slots: { inject(name: string, register: () => unknown): void; register(options: Record<string, unknown>, render: () => unknown): unknown } }): void {
   ctx.effect(() => {
     const element = document.createElement('style')
-    element.textContent = CSS
+    element.textContent = CSS + SETTINGS_PAGE_CSS
     document.head.append(element)
     return () => { element.remove() }
   }, 'dsh-mini-panel: card styles')
@@ -146,8 +148,16 @@ export function apply(ctx: { effect(callback: () => () => void, label: string): 
     scope.effect(() => followPanelSession(scope.uiWorkspace, scope), 'dsh-mini-panel: panel session')
   })
 
+  // 设置 → DSH Mini: its own section, right after 金融账户 (order 30).
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'dsh-mini-sites',
+    order: 31,
+    label: () => 'DSH Mini',
+  }, () => h(SettingsPage, null)))
+
   ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
     name: 'settings.plugin.item',
     key: NS,
-  }, () => h(Panel, null)))
+  }, () => h<PanelProps>(Panel, {})))
 }

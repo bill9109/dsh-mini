@@ -839,9 +839,41 @@
     return lines.join('\n');
   }
 
+  /** Image bytes for insert-image: data: URLs decode here, http(s) goes through the background's checked fetch. */
+  function imageFetcher(page, commandOf) {
+    return async src => {
+      try {
+        let type, base64, name = 'image';
+        const data = /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/.exec(src);
+        if (data) { type = data[1]; base64 = data[2]; name = 'image.' + type.split('/')[1]; }
+        else {
+          const cmd = commandOf();
+          const reply = await send({ type: 'page-image', pageSession: page, commandId: cmd?.commandId, src });
+          const result = reply?.ok ? reply.result : { ok: false, code: 'IMAGE_UNAVAILABLE', message: reply?.error?.message || 'Image fetch failed' };
+          if (!result.ok) return result;
+          ({ type, base64, name } = result);
+        }
+        const bin = atob(base64), bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return { ok: true, type, name, bytes };
+      } catch (error) { return { ok: false, code: 'IMAGE_UNAVAILABLE', message: String(error?.message || error).slice(0, 160) }; }
+    };
+  }
+  // Open shadow roots hide both the focused control and the selection from the light DOM.
+  function deepActive() { let a = document.activeElement; while (a?.shadowRoot?.activeElement) a = a.shadowRoot.activeElement; return a; }
+  function composedRange(selection) {
+    const roots = []; for (let a = document.activeElement; a?.shadowRoot; a = a.shadowRoot.activeElement) roots.push(a.shadowRoot);
+    if (roots.length && typeof selection.getComposedRanges === 'function') {
+      try {
+        const [r] = selection.getComposedRanges({ shadowRoots: roots });
+        if (r) { const range = document.createRange(); range.setStart(r.startContainer, r.startOffset); range.setEnd(r.endContainer, r.endOffset); return range; }
+      } catch (e) { /* fall back to the light-DOM range */ }
+    }
+    return selection.getRangeAt(0).cloneRange();
+  }
   function readAnchor() {
     if (pageSuspended || composingEditor || document.activeElement === host) return null;
-    const active = document.activeElement;
+    const active = deepActive();
     let value;
     if (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) {
       if (active instanceof HTMLInputElement && !['text', 'search', 'url', 'tel'].includes(active.type)) return null;
@@ -853,7 +885,7 @@
     } else {
       const selection = getSelection();
       if (!selection?.rangeCount) return null;
-      const range = selection.getRangeAt(0).cloneRange();
+      const range = composedRange(selection);
       if (!range.collapsed && sameRange(range, dismissedRange)) return null;
       let editor = element(range.startContainer);
       // Do NOT narrow this to the nearest .zone-container. Feishu keeps the real
@@ -1340,7 +1372,9 @@
    */
   async function beginTarget(task) {
     const initial = await task.kernel.begin(task.page, task.anchor).catch(error => ({ ok: false, code: error?.code }));
-    if (!initial.ok) { setTask('error', panelError(initial.code)); task.control.abort(); return; }
+    // A selection that cannot be written (read-only page text, a cross-block range) still binds the
+    // task: the model can read the page and work from refs it reads. Only an unbound task stops here.
+    if (!initial.ok && !initial.bound) { setTask('error', panelError(initial.code)); task.control.abort(); return; }
     if (task.control.signal.aborted) return;
     task.initial = initial;
     await task.channel.start(task.page, task.control.signal);
@@ -1363,7 +1397,7 @@
       const reply=await send(message);
       return reply?.ok?reply.result:{ok:false,code:'BRIDGE_UNAVAILABLE',message:reply?.error?.message||'编辑器桥不可用',modification:spec.action==='edit'?'unknown':'not-modified',verification:'none',retryable:false};
     };
-    task.kernel=new globalThis.DSHPageKernel.Kernel({document,location,documentId:pageDocumentId,bridge});
+    task.kernel=new globalThis.DSHPageKernel.Kernel({document,location,documentId:pageDocumentId,bridge,fetchImage:imageFetcher(page,()=>channel?.currentCommand)});
     taskKind='rewrite';taskTitle=instruction;detailsVisible=false;taskVisible=true;
     if(!retry)el('instruction').value='';el('result').value='';menu(false);status('');setTask('starting','正在读取编辑目标…');resetStream();
     try {
@@ -1451,7 +1485,7 @@
       const reply = await send(message);
       return reply?.ok ? reply.result : { ok: false, code: 'BRIDGE_UNAVAILABLE', message: reply?.error?.message || '编辑器桥不可用', modification: spec.action === 'edit' ? 'unknown' : 'not-modified', verification: 'none', retryable: false };
     };
-    task.kernel = new globalThis.DSHPageKernel.Kernel({ document, location, documentId: pageDocumentId, bridge });
+    task.kernel = new globalThis.DSHPageKernel.Kernel({ document, location, documentId: pageDocumentId, bridge, fetchImage: imageFetcher(page, () => task.channel?.currentCommand) });
     task.channel = new globalThis.DSHPageChannel.Channel({ send, kernel: task.kernel });
     const end = reason => {
       if (leaseTask !== task) return;

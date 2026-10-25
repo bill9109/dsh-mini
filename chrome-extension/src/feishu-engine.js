@@ -120,7 +120,7 @@
     // the caret. That state was never exposed, so a caller could not tell whether a write was likely to
     // land or why one silently did nothing. It travels with every target read now.
     focus:(()=>{try{const active=document.activeElement;const inside=Boolean(fx.el&&active&&fx.el.contains(active));return {blockHoldsFocus:inside,activeTag:active?active.tagName:null,selectionCollapsed:(()=>{const s=getSelection();return s?s.isCollapsed:null;})()};}catch(e){return null;}})(),
-    capabilities:{operations:blocked?[]:['replace-selection','insert-at-caret','replace-block','keep-block-kind','set-format'],contentTypes:['plain','markdown'],formats:blocked?[]:formats,clearFormats:[...booleanMarks,'color','highlight','autoNumber'],atomicCellReplacement:false}};
+    capabilities:{operations:blocked?[]:['replace-selection','insert-at-caret','replace-block','keep-block-kind','set-format','insert-before','insert-after','delete-block'],contentTypes:['plain','markdown'],formats:blocked?[]:formats,clearFormats:[...booleanMarks,'color','highlight','autoNumber'],atomicCellReplacement:false,scopes:['target','outline','range','keyword','document']}};
     snapshot.revision='fs-'+hash(JSON.stringify([recordId,kind,zone.signature,seq,editable]));
     return snapshot;
   }
@@ -150,6 +150,18 @@
     return found;
   }
   /** Model-derived snapshot for a block that may not be mounted at all. */
+  /** Metadata of an image block, read from its record (the pixels stay on Feishu's side). */
+  function mediaOf(model) {
+    if (model?.type !== 'image') return null;
+    try {
+      const img = (model.snapshot || model.struct?.record?.snapshot || {}).image;
+      if (!img || typeof img !== 'object') return null;
+      const cap = img.caption?.text?.initialAttributedTexts?.text;
+      const caption = Array.isArray(cap) ? Object.values(cap).join('') : (cap && typeof cap === 'object' ? Object.values(cap).join('') : (typeof cap === 'string' ? cap : ''));
+      return { kind: 'image', name: img.name || null, mimeType: img.mimeType || null, bytes: Number.isFinite(img.size) ? img.size : null,
+        width: Number.isFinite(img.width) ? img.width : null, height: Number.isFinite(img.height) ? img.height : null, token: img.token || null, caption };
+    } catch (e) { return null; }
+  }
   function modelSnapshot(model) {
     // `id`/`recordId` live on the prototype, so Object.keys never showed them; try the same chain
     // the live probe resolved them with rather than assuming an own property.
@@ -165,7 +177,7 @@
     } })();
     // Two id spaces: recordId is the stable string a ref is built from, while struct.id and
     // struct.parent.id are numeric block ids. Both are needed to rebuild the tree.
-    return { recordId, kind: facts.kind, editable: facts.editable, blockId: model.id ?? model.struct?.id ?? null,
+    return { recordId, kind: facts.kind, editable: facts.editable, media: mediaOf(model), blockId: model.id ?? model.struct?.id ?? null,
       parentBlockId: model.struct?.parent?.id ?? null,
       snapshot: snapshotOf(recordId, facts.kind, facts.editable, facts.seq, zone), prefix: zone.text.slice(0, 120) };
   }
@@ -190,13 +202,26 @@
    * Returns the same revision a later write will be checked against, so a ref taken from the
    * outline is directly writable without a second round trip per block.
    */
+  /**
+   * allBlockModels is in CREATION order: a block inserted mid-document is listed last (measured).
+   * Walk the tree from the root instead; models the walk does not reach keep their old order at the end.
+   */
+  function documentOrder(bm, models) {
+    const root = bm.rootBlockModel;
+    if (!root || !Array.isArray(root.children)) return models;
+    const seen = new Set(), ordered = [];
+    const walk = (m, depth) => { if (!m || seen.has(m) || depth > 40) return; seen.add(m); ordered.push(m); if (Array.isArray(m.children)) for (const c of m.children) walk(c, depth + 1); };
+    walk(root, 0);
+    for (const m of models) if (!seen.has(m)) ordered.push(m);
+    return ordered;
+  }
   function list(request) {
     const bm = manager();
     const models = bm.allBlockModels;
     if (!Array.isArray(models)) throw Error('Block manager does not expose a model list');
     const rootRecordId = bm.getRootRecordId ? bm.getRootRecordId() : null;
     const all = [];
-    for (const model of models) {
+    for (const model of documentOrder(bm, models)) {
       const entry = modelSnapshot(model);
       if (entry) all.push(entry);
     }
@@ -221,7 +246,7 @@
     const described = items
       .filter(entry => !needle || entry.prefix.includes(needle))
       .map(entry => ({ recordId: entry.recordId, blockType: entry.kind, text: entry.prefix, editable: entry.editable,
-        parentId: parentOf(entry), depth: depthOf(entry),
+        parentId: parentOf(entry), depth: depthOf(entry), ...(entry.media ? { media: entry.media } : {}),
         revision: entry.snapshot.revision, capabilities: entry.snapshot.capabilities }));
     const limit = Number.isInteger(request.limit) ? Math.min(Math.max(request.limit, 1), 100) : 100;
     const offset = typeof request.cursor === 'string' && request.cursor ? Math.max(0, parseInt(request.cursor, 10) || 0) : 0;
@@ -448,7 +473,6 @@
       // Applying a heading through the editor's shortcut can also switch on its auto-numbering; record
       // the state so the caller can turn it off deliberately instead of being surprised by 1. 2. 3..
       produced.push({ recordId: currentId, kind, text: item.text, textOk });
-      produced.push({ recordId: currentId, kind, text: item.text, textOk });
     }
     // Numbering is cleared ONCE, at the end. Doing it per item re-focuses the block and moves the caret
     // away, which broke the next item's split and kind (measured: all three items were reported failed).
@@ -474,6 +498,122 @@
     return failed.length
       ? Object.assign({ ok: false, code: 'PARTIAL_STRUCTURE', modification: 'partial', failed: failed.length }, out)
       : Object.assign({ ok: true, code: 'EDIT_APPLIED', modification: 'modified' }, out);
+  }
+  // Real delays. The shared wait() ignores its argument; the measured restructure path depends on
+  // that, so it is left alone and the newer entry points use this instead.
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  /** Split with the editor's own Enter at the end (or start) of a block and return the new block id. */
+  async function splitBlock(recordId, atStart) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const cur = engine(recordId);
+      if (!cur.z) return null;
+      focusBlock(cur);
+      await sleep(220 + attempt * 200);
+      const line = cur.z.querySelector('.ace-line') || cur.z;
+      try { const r = document.createRange(); r.selectNodeContents(line); r.collapse(!!atStart); const s = getSelection(); s.removeAllRanges(); s.addRange(r); } catch (e) {}
+      await sleep(50);
+      const known = new Set(manager().allBlockModels.map(m => m.recordId));
+      (document.activeElement || cur.z).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+      await sleep(650 + attempt * 250);
+      const fresh = manager().allBlockModels.filter(m => !known.has(m.recordId));
+      logStep('split' + (atStart ? '-start' : '') + '/verdict', { attempt, created: fresh.length, ok: fresh.length > 0 });
+      if (fresh.length) return fresh[0].recordId;
+    }
+    return null;
+  }
+  const textOf = id => { try { return capture(engine(id), id).snapshot.text; } catch (e) { return null; } };
+  /**
+   * New blocks next to an existing one, through the same verified primitives restructure uses: the
+   * editor's Enter to split, its shortcuts for the block kind, its input path for the text. The target
+   * block's own text is checked before and after - inserting may never change it.
+   */
+  async function insertBlocks(request, position) {
+    const fx = engine(request.recordId);
+    const before = capture(fx, request.recordId);
+    if (request.expectedRevision !== before.snapshot.revision) return fail('REVISION_CONFLICT', 'Editor model changed; read again before editing');
+    if (!before.snapshot.editable) return fail('READ_ONLY', 'Target is not editable');
+    if (position === 'before') {
+      // Enter at the start of a block is not safe to rely on: on a heading the original lost its kind
+      // (measured). "Before X" is the same place as "after the block above X", and that path is verified.
+      const bm = manager();
+      const parent = parentRecordOf(bm, request.recordId);
+      const siblings = parent ? (bm.allBlockModels.find(m => m.recordId === parent)?.children || []) : [];
+      const at = siblings.findIndex(c => c && c.recordId === request.recordId);
+      const prev = at > 0 ? siblings[at - 1] : null;
+      let prevSnap = null; try { if (prev) prevSnap = capture(engine(prev.recordId), prev.recordId).snapshot; } catch (e) {}
+      if (prevSnap && prevSnap.editable && !prevSnap.complex) {
+        const out = await insertBlocks(Object.assign({}, request, { recordId: prev.recordId, expectedRevision: prevSnap.revision }), 'after');
+        if (!out.ok) out.message = 'Inserting above the target went through the block above it. ' + (out.message || '');
+        return out;
+      }
+      if (before.snapshot.kind !== 'text') return fail('UNSUPPORTED_STRUCTURE', 'There is no editable block above this ' + before.snapshot.kind + ' to insert after, and splitting it would change its type. Insert after the block above, or edit this one in place.', { modification: 'not-modified' });
+    }
+    if (!fx.z) return fail('NOT_MOUNTED', 'The target block is not mounted; scroll it into view and read it again', { modification: 'not-modified' });
+    const op = request.operation;
+    const items = op.contentType === 'markdown' ? markdownToItems(op.text) : String(op.text).split(/\r?\n/).filter(l => l.trim()).map(text => ({ kind: 'text', text }));
+    if (!items.length) return fail('NOTHING_TO_DO', 'Nothing to insert');
+    const original = before.snapshot.text;
+    const produced = [];
+    let anchor = request.recordId;
+    for (let i = 0; i < items.length; i++) {
+      let id;
+      if (i === 0 && position === 'before') {
+        id = await splitBlock(request.recordId, true);
+        if (id && normalize(textOf(request.recordId) || '') !== normalize(original)) {
+          // The editor kept the id on the upper (now empty) block: the original text moved to the new id.
+          return { ok: false, code: 'TARGET_MOVED', modification: 'partial', verification: 'editor-model', retryable: false, produced,
+            message: 'The editor moved the target block while splitting; an empty block may have been added above it. Read the outline again.' };
+        }
+      } else id = await splitBlock(anchor, false);
+      if (!id) return { ok: false, code: 'SPLIT_FAILED', modification: produced.length ? 'partial' : 'not-modified', verification: 'editor-model', retryable: false, produced,
+        message: 'Could not create a new block after retries; ' + produced.length + ' block(s) were created.' };
+      const item = items[i], kind = ['ordered', 'bullet', 'heading1', 'heading2', 'heading3', 'heading4'].includes(item.kind) ? item.kind : 'text';
+      const current = capture(engine(id), id).snapshot.kind;
+      if (current !== kind) { const res = await setStructureKind(id, kind); if (!res.ok) logStep('insert/kind', { id: String(id).slice(-6), want: kind, ok: false }); }
+      const textOk = await typeIntoBlock(id, item.text);
+      produced.push({ recordId: id, kind, text: item.text, textOk });
+      anchor = id;
+    }
+    const after = manager().allBlockModels.map(m => modelSnapshot(m)).filter(Boolean);
+    const verified = produced.map(p => { const hit = after.find(a => a.recordId === p.recordId); return { recordId: p.recordId, wanted: p.kind, actual: hit ? hit.kind : null, effective: !!(hit && String(hit.prefix).startsWith(p.text.replace(/\*\*/g, '').slice(0, 12))) }; });
+    const targetKept = normalize(textOf(request.recordId) || '') === normalize(original);
+    const failed = verified.filter(v => !v.effective).length + (targetKept ? 0 : 1);
+    let snapshot = null; try { snapshot = capture(engine(anchor), anchor).snapshot; } catch (e) {}
+    const out = { verification: 'editor-model', retryable: false, verified, produced, targetKept, snapshot, retargetRecordId: anchor };
+    return failed ? Object.assign({ ok: false, code: 'PARTIAL_STRUCTURE', modification: 'partial', failed }, out) : Object.assign({ ok: true, code: 'EDIT_APPLIED', modification: 'modified' }, out);
+  }
+  /**
+   * The transaction API has no delete(id): a block is removed from its PARENT's children
+   * (tx.removeChildren(parentId, [id]), read from the live transaction object). The parent is
+   * found by walking the tree, since models carry their children, not their parent.
+   */
+  function parentRecordOf(bm, recordId) {
+    const root = bm.rootBlockModel;
+    const stack = root ? [root] : [];
+    while (stack.length) { const m = stack.pop(); const kids = Array.isArray(m.children) ? m.children : []; if (kids.some(c => c && c.recordId === recordId)) return m.recordId; stack.push(...kids); }
+    return null;
+  }
+  async function removeRecord(bm, recordId) {
+    const parent = parentRecordOf(bm, recordId);
+    if (!parent) throw Error('the block has no parent in the document tree');
+    await bm.applyTransaction('delete', tx => tx.removeChildren(parent, [recordId]));
+  }
+  /** Remove one block through the data service's own transaction, verified by its absence. */
+  async function deleteBlock(request) {
+    const fx = engine(request.recordId);
+    const before = capture(fx, request.recordId);
+    if (request.expectedRevision !== before.snapshot.revision) return fail('REVISION_CONFLICT', 'Editor model changed; read again before editing');
+    if (!before.snapshot.editable) return fail('READ_ONLY', 'Target is not editable');
+    const bm = manager();
+    const order = documentOrder(bm, bm.allBlockModels).map(m => m.recordId).filter(id => id !== bm.getRootRecordId?.()), at = order.indexOf(request.recordId);
+    const neighbour = at > 0 ? order[at - 1] : order[at + 1] || null;
+    try { await removeRecord(bm, request.recordId); }
+    catch (e) { return fail('EDITOR_ERROR', 'The editor refused the delete: ' + String(e.message || e), { modification: 'unknown' }); }
+    await sleep(250);
+    const gone = !manager().allBlockModels.some(m => m.recordId === request.recordId);
+    let snapshot = null; try { if (neighbour) snapshot = capture(engine(neighbour), neighbour).snapshot; } catch (e) {}
+    return gone ? { ok: true, code: 'EDIT_APPLIED', modification: 'modified', verification: 'editor-model', retryable: false, removed: request.recordId, snapshot, retargetRecordId: snapshot ? neighbour : null }
+      : fail('NOT_APPLIED', 'The block is still present after the delete transaction', { modification: 'unknown', verification: 'editor-model' });
   }
   /** Change one block's structure kind and report the type that actually resulted. */
   async function setStructureKind(recordId, kind) {
@@ -609,7 +749,7 @@
         // The type argument is an OPERATION NAME the data service understands, not a label of my
         // own: an invented name made every delete fail, which is what left the new blocks and the
         // original side by side. 'delete' is the name this API uses.
-        await bm.applyTransaction('delete', tx => tx.delete(request.recordId));
+        await removeRecord(bm, request.recordId);
       } catch (e) {
         return { ok: false, code: 'ANCHOR_NOT_REMOVED', modification: 'partial', verification: 'editor-model', retryable: false, created, removed: null,
           message: 'The new blocks were written, but the original block could not be removed: ' + String(e.message || e) };
@@ -691,6 +831,18 @@
         if(!items.length) return fail('NOTHING_TO_DO','No structure lines were given',{modification:'not-modified'});
         return await restructure(request.recordId, items);
       } catch(e) { return fail('EDITOR_ERROR',String(e.message||e),{modification:'unknown',verification:'none'}); }
+    }
+    if(request.operation && (request.operation.type==='insert-before'||request.operation.type==='insert-after')) {
+      try { return await insertBlocks(request, request.operation.type==='insert-before'?'before':'after'); } catch(e) { return fail('EDITOR_ERROR',String(e.message||e),{modification:'unknown',verification:'none'}); }
+    }
+    if(request.operation && request.operation.type==='delete-block') {
+      try { return await deleteBlock(request); } catch(e) { return fail('EDITOR_ERROR',String(e.message||e),{modification:'unknown',verification:'none'}); }
+    }
+    if (request.action === 'read') {
+      // Non-text blocks (images) have no text zone to open; answer from the record instead of failing.
+      const m = manager().allBlockModels.find(x => x.recordId === request.recordId);
+      const media = m ? mediaOf(m) : null;
+      if (media) { const snap = modelSnapshot(m); return { ok: true, code: 'READ', modification: 'not-modified', verification: 'editor-model', retryable: false, snapshot: Object.assign({}, snap.snapshot, { kind: 'image', text: '', editable: false, media }) }; }
     }
     let fx,before;
     try {fx=engine(request.recordId);before=capture(fx,request.recordId);} catch(e) {return fail(e.code||'ADAPTER_UNAVAILABLE',String(e.message||e));}

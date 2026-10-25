@@ -1,5 +1,6 @@
 # Build-only symlink into the dsh checkout (scripts/build.mjs and scripts/test.mjs create and drop it)
 node_modules/
+node_modules.dsh-parked/
 
 # Local runtime install of ws for a link: profile install (the reference repo ships no lockfile)
 pnpm-lock.yaml

@@ -133,14 +133,48 @@ async function flushPendingResults() {
 void flushPendingResults();
 async function modelCall(sender, spec) {
   if (!Number.isInteger(sender.tab?.id) || !spec || spec.url !== sender.url) throw Error('Page URL mismatch');
-  if (!/(^|\.)(feishu\.cn|larksuite\.com)$/.test(new URL(sender.url).hostname)) return { ok: false, code: 'UNSUPPORTED_EDITOR', modification: 'not-modified', verification: 'none', retryable: false };
   const target = { tabId: sender.tab.id, frameIds: [sender.frameId || 0] };
+  // Code editors on any site go to their own engine; everything else is the Feishu editor model.
+  if (spec.engine === 'code') {
+    await chrome.scripting.executeScript({ target, world: 'MAIN', files: ['src/code-engine.js'] });
+    const results = await chrome.scripting.executeScript({ target, world: 'MAIN', func: async spec => globalThis.DSHCodeV1.run(spec), args: [spec] });
+    return results?.[0]?.result;
+  }
+  if (!/(^|\.)(feishu\.cn|larksuite\.com)$/.test(new URL(sender.url).hostname)) return { ok: false, code: 'UNSUPPORTED_EDITOR', modification: 'not-modified', verification: 'none', retryable: false };
   await chrome.scripting.executeScript({ target, world: 'MAIN', files: ['src/feishu-engine.js'] });
   const results = await chrome.scripting.executeScript({ target, world: 'MAIN', func: async spec => globalThis.DSHFeishuV2.run(spec), args: [spec] });
   return results?.[0]?.result;
 }
 const fail = (code, message) => ({ ok: false, error: { code, message } });
-const types = ['rewrite', 'cancel', 'desktop-open', 'desktop-result', 'page-claim', 'page-start', 'page-result', 'page-model', 'page-inspect', 'health', 'options', 'session-state', 'session-list', 'session-new', 'session-bind', 'session-detach', 'open-panel', 'panel-state', 'panel-close'];
+const IMAGE_TYPES = /^image\/(png|jpeg|gif|webp)$/;
+const IMAGE_MAX = 8 * 1024 * 1024;
+// The extension can reach hosts the page cannot (it holds <all_urls>), so it never fetches what only
+// a private network would answer: an edit must not become a way to probe the user's intranet.
+function publicImageUrl(raw) {
+  let u; try { u = new URL(raw); } catch { return null; }
+  if (!/^https?:$/.test(u.protocol) || u.username || u.password) return null;
+  const h = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal') || !h.includes('.') && !h.includes(':')) return null;
+  if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(h)) return null;
+  if (h === '::1' || /^(fc|fd|fe80)/.test(h)) return null;
+  return u;
+}
+async function fetchImage(src) {
+  const u = publicImageUrl(src);
+  if (!u) return { ok: false, code: 'IMAGE_URL_REFUSED', message: 'Only public http(s) image URLs can be fetched.' };
+  const response = await fetch(u, { credentials: 'omit', redirect: 'follow', signal: AbortSignal.timeout(15000) });
+  if (!response.ok) return { ok: false, code: 'IMAGE_UNAVAILABLE', message: 'Image request failed with HTTP ' + response.status };
+  if (response.redirected && !publicImageUrl(response.url)) return { ok: false, code: 'IMAGE_URL_REFUSED', message: 'The image redirected to a non-public address.' };
+  const type = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (!IMAGE_TYPES.test(type)) return { ok: false, code: 'IMAGE_TYPE_REFUSED', message: 'Not a png, jpeg, gif or webp image (' + (type || 'no type') + ').' };
+  const buf = await response.arrayBuffer();
+  if (buf.byteLength > IMAGE_MAX) return { ok: false, code: 'IMAGE_TOO_LARGE', message: 'Images are limited to 8 MB.' };
+  let binary = ''; const bytes = new Uint8Array(buf);
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  const name = (u.pathname.split('/').pop() || 'image').slice(0, 80);
+  return { ok: true, type, name, base64: btoa(binary) };
+}
+const types = ['rewrite', 'cancel', 'desktop-open', 'desktop-result', 'page-claim', 'page-start', 'page-result', 'page-model', 'page-inspect', 'page-image', 'health', 'options', 'session-state', 'session-list', 'session-new', 'session-bind', 'session-detach', 'open-panel', 'panel-state', 'panel-close'];
 chrome.storage.local.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' });
 chrome.storage.session.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' });
 const digest = async text => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(n => n.toString(16).padStart(2, '0')).join('');
@@ -177,6 +211,27 @@ function createRequest(endpoint, pairingToken, controller) {
     return data;
   };
 }
+
+/**
+ * Pairing heartbeat: one authenticated health call at startup, every minute and whenever the
+ * connection settings change, so the DSH settings page can show whether this extension is paired
+ * (the Host records the last accepted and the last refused call). Failures are silent: an unpaired
+ * extension is a normal state, and the options page reports details on demand.
+ */
+const HEARTBEAT_ALARM = 'dsh-mini-heartbeat';
+async function heartbeat() {
+  try {
+    const { endpoint, pairingToken } = await loadConfig();
+    await fetch(new URL('/v1/health', endpoint), { redirect: 'error', headers: { authorization: 'Bearer ' + pairingToken }, signal: AbortSignal.timeout(5000) });
+  } catch { /* not paired or Host not running */ }
+}
+// Each hook is optional: a browser (or test host) without one still runs everything else.
+chrome.alarms?.create(HEARTBEAT_ALARM, { periodInMinutes: 1 });
+chrome.alarms?.onAlarm.addListener(alarm => { if (alarm.name === HEARTBEAT_ALARM) void heartbeat(); });
+chrome.runtime.onStartup?.addListener(() => { void heartbeat(); });
+chrome.runtime.onInstalled?.addListener(() => { void heartbeat(); });
+chrome.storage.onChanged?.addListener((changes, area) => { if (area === 'local' && (changes.pairingToken || changes.endpoint)) void heartbeat(); });
+if (chrome.alarms) void heartbeat();
 
 /** Claim this document for one operation, so session mutations and rewrites serialise. */
 async function withDocument(sender, message) {
@@ -531,6 +586,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       if (message.type === 'health') { respond({ ok: true, result: await request('/v1/health') }); return; }
       if (message.type === 'session-list') { respond({ ok: true, sessions: (await request('/v1/sessions')).sessions }); return; }
       if (message.type === 'desktop-result') { respond({ ok: true, result: await request('/v1/desktop/result?selectionId=' + encodeURIComponent(message.selectionId)) }); return; }
+      if (message.type === 'page-image') {
+        // Only an authenticated page task, while it is executing a command, may ask for bytes.
+        const t = taskFor(sender, message);
+        if (!t.active || typeof message.src !== 'string' || !t.started.has(message.commandId)) { respond(fail('INVALID_MESSAGE', 'Image fetch outside a running page command')); return; }
+        respond({ ok: true, result: await fetchImage(message.src) }); return;
+      }
       if (message.type === 'page-inspect') {
         if (message.spec?.action !== 'read') { respond(fail('INVALID_MESSAGE', 'Inspection is read-only')); return; }
         // The MAIN-world bridge is reachable from this extension only, but the read itself must

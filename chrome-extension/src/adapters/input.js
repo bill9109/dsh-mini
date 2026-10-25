@@ -10,7 +10,7 @@ function snapshot(ctx, t) {
   if (!node?.isConnected) throw ctx.fault('STALE_TARGET', 'Target node removed; replacement nodes are not guessed');
   const text = node.value, editable = !node.disabled && !node.readOnly;
   const base = { adapter: 'input', kind: node.tagName?.toLowerCase() || 'input', text, editable, inputType: node.type || '',
-    capabilities: { operations, contentTypes: ['plain'], formats: [], clearFormats: [], atomicCellReplacement: false } };
+    capabilities: { operations, contentTypes: ['plain'], formats: [], clearFormats: [], atomicCellReplacement: false, scopes: ['target', 'document'] } };
   alog('snapshot/exit', { kind: base.kind, chars: String(text || '').length, editable });
   return { ...base, revision: ctx.revision([text, editable, node.type]), verification: 'dom-observed' };
 }

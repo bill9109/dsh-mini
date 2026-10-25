@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DSH Mini Panel",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Rewrite selected page text through a local DSH bridge.",
   "icons": {
     "16": "src/icons/icon-16.png",
@@ -21,7 +21,8 @@
   "permissions": [
     "storage",
     "scripting",
-    "sidePanel"
+    "sidePanel",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -43,14 +44,19 @@
       "js": [
         "src/edit-protocol.js",
         "src/target-registry.js",
+        "src/markup.js",
+        "src/page-document.js",
         "src/adapters/input.js",
         "src/adapters/richtext.js",
         "src/adapters/feishu.js",
+        "src/adapters/code.js",
         "src/edit-core.js",
         "src/page-channel.js",
         "src/content.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
     }
   ],
   "side_panel": {

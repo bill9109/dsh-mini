@@ -79,7 +79,10 @@ export declare class PageBroker {
         taskId: string;
         documentId: string;
         surface: Surface;
+        url: string;
     } | undefined;
+    /** Whether a side-panel lease currently shows this session (the GUI holds it open). */
+    leasedSession(sessionId: string): boolean;
     /** The task's current interaction surface, or undefined when it is unknown or inactive. */
     taskForSurface(taskId: string): Surface | undefined;
     /** True when the task exists but no longer serves a session: its sockets have nothing left to do. */
